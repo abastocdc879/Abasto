@@ -1,0 +1,1068 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Control de Carga</title>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.10/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;padding:20px}
+  #root{max-width:960px;margin:0 auto}
+  .card{padding:2rem;background:#fff;border-radius:12px;box-shadow:0 10px 40px rgba(0,0,0,.3);min-height:500px}
+  .btn{padding:10px 16px;font-size:14px;border:none;border-radius:6px;cursor:pointer;font-weight:bold}
+  .btn-primary{background:#2196F3;color:#fff}
+  .btn-success{background:#4CAF50;color:#fff}
+  .btn-danger{background:#f44336;color:#fff}
+  .btn-warn{background:#FFC107;color:#333}
+  .btn-secondary{background:#666;color:#fff}
+  .input,.select{width:100%;padding:10px;font-size:13px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box}
+  .label{display:block;font-size:12px;color:#666;margin-bottom:4px;font-weight:bold}
+  .row{display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+  .box{background:#f5f5f5;padding:1.2rem;border-radius:8px;margin-bottom:1rem}
+  h2{font-size:22px;color:#333;margin-bottom:1rem}
+  h3{font-size:16px;color:#333;margin-bottom:.8rem}
+  .tab{padding:10px 14px;cursor:pointer;border-bottom:3px solid transparent;font-weight:bold;font-size:14px;color:#666}
+  .tab.active{border-color:#2196F3;color:#2196F3}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:8px;text-align:left;border-bottom:1px solid #eee}
+  th{background:#f5f5f5;font-weight:bold;color:#333}
+  .pill{display:inline-block;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:bold;color:#fff}
+  .pill-green{background:#4CAF50}
+  .pill-gray{background:#999}
+  .pill-blue{background:#2196F3}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const {useState, useEffect, useMemo} = React;
+
+// ====== CONFIG ADMIN ======
+const ADMIN_USER = "admin";
+const DEFAULT_ADMIN_PASS = "admin1234";
+const DEFAULT_OP_PASS = "1234";
+
+// ====== STORAGE ======
+const STORE_KEY = "control_carga_v2";
+const defaultState = {
+  adminPass: DEFAULT_ADMIN_PASS,
+  operarios: [
+    {nombre:"Juan Pérez", pass:DEFAULT_OP_PASS},
+    {nombre:"María García", pass:DEFAULT_OP_PASS},
+    {nombre:"Carlos López", pass:DEFAULT_OP_PASS},
+    {nombre:"Elena Rodríguez", pass:DEFAULT_OP_PASS},
+  ],
+  catalogo: [
+    {id:"P1", nombre:"Aceite de oliva 500ml"},
+    {id:"P2", nombre:"Pasta integral 500g"},
+    {id:"P3", nombre:"Leche descremada 1L"},
+  ],
+  locales: [
+    {id:1, nombre:"Local A", productos:[
+      {id:"P1", nombre:"Aceite de oliva 500ml", cant:5},
+      {id:"P2", nombre:"Pasta integral 500g", cant:3},
+      {id:"P3", nombre:"Leche descremada 1L", cant:4},
+    ], cajas:[], completado:false, operario:null},
+    {id:2, nombre:"Local B", productos:[
+      {id:"P1", nombre:"Aceite de oliva 500ml", cant:3},
+      {id:"P2", nombre:"Pasta integral 500g", cant:2},
+      {id:"P3", nombre:"Leche descremada 1L", cant:4},
+    ], cajas:[], completado:false, operario:null},
+  ],
+  historial: [],
+  tdImport: null,
+};
+
+function loadState(){
+  try{
+    const raw = localStorage.getItem(STORE_KEY);
+    if(!raw) return structuredClone(defaultState);
+    const parsed = JSON.parse(raw);
+    const merged = {...structuredClone(defaultState), ...parsed};
+    // Migración: operarios string -> objeto {nombre, pass}
+    merged.operarios = (merged.operarios||[]).map(o =>
+      typeof o === "string" ? {nombre:o, pass:DEFAULT_OP_PASS} : {nombre:o.nombre, pass:o.pass||DEFAULT_OP_PASS}
+    );
+    if(!merged.adminPass) merged.adminPass = DEFAULT_ADMIN_PASS;
+    return merged;
+  }catch(e){return structuredClone(defaultState)}
+}
+
+
+function App(){
+  const [state, setState] = useState(loadState);
+  const [paso, setPaso] = useState("login");
+  const [operarioActual, setOperarioActual] = useState("");
+  const [localActual, setLocalActual] = useState(0);
+  const [adminTab, setAdminTab] = useState("locales");
+  const [adminUser, setAdminUser] = useState("");
+  const [adminPass, setAdminPass] = useState("");
+  const [adminError, setAdminError] = useState("");
+
+  useEffect(()=>{ localStorage.setItem(STORE_KEY, JSON.stringify(state)) },[state]);
+
+  const update = (fn)=> setState(prev=>{ const n=structuredClone(prev); fn(n); return n; });
+
+  // ====== LOGIN ======
+  if(paso==="login"){
+    return (
+      <div className="card" style={{textAlign:"center",display:"flex",flexDirection:"column",justifyContent:"center"}}>
+        <h1 style={{fontSize:32,marginBottom:"1rem"}}>📦 Control de Carga</h1>
+        <p style={{color:"#666",marginBottom:"2rem"}}>Selecciona tu rol</p>
+        <div style={{display:"flex",gap:20,justifyContent:"center",flexWrap:"wrap"}}>
+          <button className="btn btn-success" style={{padding:"16px 32px",fontSize:16}} onClick={()=>setPaso("operario-select")}>👷 OPERARIO</button>
+          <button className="btn btn-primary" style={{padding:"16px 32px",fontSize:16}} onClick={()=>setPaso("admin-login")}>👨‍💼 ADMINISTRADOR</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ====== ADMIN LOGIN ======
+  if(paso==="admin-login"){
+    const submit = ()=>{
+      if(adminUser===ADMIN_USER && adminPass===state.adminPass){
+        setAdminError(""); setAdminUser(""); setAdminPass(""); setPaso("admin");
+      } else setAdminError("Usuario o contraseña incorrectos");
+    };
+    return (
+      <div className="card" style={{maxWidth:420,margin:"60px auto"}}>
+        <button className="btn btn-secondary" onClick={()=>setPaso("login")} style={{marginBottom:20}}>← Volver</button>
+        <h2>🔐 Login Administrador</h2>
+        <div style={{marginBottom:12}}>
+          <label className="label">Usuario</label>
+          <input className="input" value={adminUser} onChange={e=>setAdminUser(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
+        </div>
+        <div style={{marginBottom:12}}>
+          <label className="label">Contraseña</label>
+          <input className="input" type="password" value={adminPass} onChange={e=>setAdminPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
+        </div>
+        {adminError && <div style={{background:"#f44336",color:"#fff",padding:10,borderRadius:4,marginBottom:10,fontSize:13}}>{adminError}</div>}
+        <button className="btn btn-primary" style={{width:"100%"}} onClick={submit}>Entrar</button>
+        <p style={{fontSize:11,color:"#999",marginTop:14,textAlign:"center"}}>Por defecto: admin / admin1234</p>
+      </div>
+    );
+  }
+
+  // ====== ADMIN ======
+  if(paso==="admin"){
+    return <AdminPanel state={state} update={update} setPaso={setPaso} tab={adminTab} setTab={setAdminTab}/>;
+  }
+
+  // ====== OPERARIO ======
+  if(paso==="operario-select"){
+    return (
+      <div className="card">
+        <button className="btn btn-secondary" onClick={()=>setPaso("login")} style={{marginBottom:20}}>← Volver</button>
+        <h2>👤 Selecciona tu nombre</h2>
+        {state.operarios.length===0 ? <p style={{color:"#999"}}>No hay operarios cargados. Pedile al admin que los agregue.</p> :
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:12}}>
+          {state.operarios.map(op=>(
+            <button key={op.nombre} className="btn" style={{padding:16,background:"#fff",border:"2px solid #4CAF50",color:"#333"}}
+              onClick={()=>{ setOperarioActual(op.nombre); setPaso("operario-login"); }}>{op.nombre}</button>
+          ))}
+        </div>}
+      </div>
+    );
+  }
+
+  if(paso==="operario-login"){
+    const submit = ()=>{
+      const op = state.operarios.find(o=>o.nombre===operarioActual);
+      if(op && adminPass===op.pass){
+        setAdminError(""); setAdminPass(""); setLocalActual(0); setPaso("operario-work");
+      } else setAdminError("Contraseña incorrecta");
+    };
+    return (
+      <div className="card" style={{maxWidth:420,margin:"60px auto"}}>
+        <button className="btn btn-secondary" onClick={()=>{setPaso("operario-select");setAdminPass("");setAdminError("");}} style={{marginBottom:20}}>← Volver</button>
+        <h2>🔐 {operarioActual}</h2>
+        <div style={{marginBottom:12}}>
+          <label className="label">Contraseña</label>
+          <input className="input" type="password" autoFocus value={adminPass} onChange={e=>setAdminPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
+        </div>
+        {adminError && <div style={{background:"#f44336",color:"#fff",padding:10,borderRadius:4,marginBottom:10,fontSize:13}}>{adminError}</div>}
+        <button className="btn btn-success" style={{width:"100%"}} onClick={submit}>Entrar</button>
+        <p style={{fontSize:11,color:"#999",marginTop:14,textAlign:"center"}}>Si no la sabés, pedile al administrador que la cambie.</p>
+      </div>
+    );
+  }
+
+  if(paso==="operario-work"){
+    return <OperarioPanel
+      state={state} update={update}
+      operarioActual={operarioActual}
+      localActual={localActual} setLocalActual={setLocalActual}
+      setPaso={setPaso} setOperarioActual={setOperarioActual}/>;
+  }
+  return null;
+}
+
+
+// ====== OPERARIO PANEL ======
+function OperarioPanel({state,update,operarioActual,localActual,setLocalActual,setPaso,setOperarioActual}){
+  const [form, setForm] = useState({producto:"",cantidad:"",peso:""});
+  const [msg, setMsg] = useState("");
+  const local = state.locales[localActual];
+
+  if(!local){
+    return <div className="card">
+      <h2>✅ No hay locales pendientes</h2>
+      <button className="btn btn-secondary" onClick={()=>setPaso("login")}>Salir</button>
+    </div>;
+  }
+
+  const flash = (m)=>{ setMsg(m); setTimeout(()=>setMsg(""),1800); };
+
+  const agregar = ()=>{
+    if(!form.producto||!form.cantidad||!form.peso) return flash("❌ Completá todos los campos");
+    const cant = parseInt(form.cantidad);
+    const peso = parseFloat(form.peso);
+    if(!(cant>0)) return flash("❌ Cantidad inválida");
+    if(!(peso>0)) return flash("❌ Peso inválido");
+    update(n=>{
+      const L = n.locales[localActual];
+      const p = L.productos.find(x=>x.id===form.producto);
+      if(!p || cant>p.cant){ flash(`❌ Máx ${p?.cant||0} disponibles`); return; }
+      p.cant -= cant;
+      L.cajas.push({
+        id: Date.now()+Math.random(),
+        productoId: p.id, producto: p.nombre,
+        cantidad: cant, peso,
+        operario: operarioActual,
+        hora: new Date().toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"}),
+      });
+    });
+    setForm({producto:"",cantidad:"",peso:""});
+    flash("✅ Caja agregada");
+  };
+
+  const eliminarCaja = (id)=> update(n=>{
+    const L = n.locales[localActual];
+    const c = L.cajas.find(x=>x.id===id); if(!c) return;
+    const p = L.productos.find(x=>x.id===c.productoId);
+    if(p) p.cant += c.cantidad;
+    L.cajas = L.cajas.filter(x=>x.id!==id);
+  });
+
+  const completar = ()=>{
+    update(n=>{
+      const L = n.locales[localActual];
+      L.completado = true; L.operario = operarioActual;
+      n.historial.push({
+        id: Date.now(),
+        fecha: new Date().toISOString(),
+        localNombre: L.nombre,
+        operario: operarioActual,
+        cajas: structuredClone(L.cajas),
+        totalCajas: L.cajas.length,
+        totalUn: L.cajas.reduce((s,c)=>s+c.cantidad,0),
+        pesoKg: L.cajas.reduce((s,c)=>s+c.peso,0),
+      });
+    });
+    if(localActual < state.locales.length-1){
+      setLocalActual(localActual+1);
+      flash("✅ Local completado. Siguiente...");
+    } else flash("✅ ¡Todos los locales completados!");
+  };
+
+  const peso = local.cajas.reduce((s,c)=>s+c.peso,0);
+  const cantTot = local.cajas.reduce((s,c)=>s+c.cantidad,0);
+
+  return (
+    <div className="card">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:8}}>
+        <button className="btn btn-secondary" onClick={()=>{ setPaso("operario-select"); setOperarioActual(""); }}>← Cambiar operario</button>
+        <h2 style={{margin:0,fontSize:18}}>👤 {operarioActual}</h2>
+        <button className="btn btn-danger" onClick={()=>setPaso("login")}>Salir</button>
+      </div>
+
+      <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+        {state.locales.map((L,i)=>(
+          <button key={L.id} className="btn" style={{padding:"6px 12px",fontSize:12,background:i===localActual?"#2196F3":L.completado?"#4CAF50":"#ddd",color:i===localActual||L.completado?"#fff":"#333"}}
+            onClick={()=>setLocalActual(i)}>{L.nombre}{L.completado?" ✓":""}</button>
+        ))}
+      </div>
+
+      {local.completado ? (
+        <div style={{background:"#4CAF50",color:"#fff",padding:24,borderRadius:8,textAlign:"center"}}>
+          <h3 style={{margin:0,fontSize:20}}>✅ {local.nombre} COMPLETADO</h3>
+        </div>
+      ) : (
+        <>
+          <div style={{background:"#2196F3",color:"#fff",padding:18,borderRadius:8,marginBottom:14}}>
+            <p style={{fontSize:12,margin:0}}>Local actual</p>
+            <h3 style={{fontSize:26,margin:0}}>{local.nombre}</h3>
+            <p style={{fontSize:12,marginTop:4}}>Cajas: {local.cajas.length}</p>
+          </div>
+
+          <div className="box">
+            <h3>Productos pendientes</h3>
+            {local.productos.filter(p=>p.cant>0).length===0 ? <p style={{color:"#999",fontSize:13}}>Sin pendientes</p> :
+            local.productos.filter(p=>p.cant>0).map(p=>(
+              <div key={p.id} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #ddd"}}>
+                <span style={{fontSize:13}}>{p.nombre}</span>
+                <span className="pill pill-green">{p.cant} un.</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="box">
+            <h3>Agregar caja</h3>
+            <div style={{marginBottom:10}}>
+              <label className="label">Producto</label>
+              <select className="select" value={form.producto} onChange={e=>setForm({...form,producto:e.target.value})}>
+                <option value="">-- Selecciona --</option>
+                {local.productos.filter(p=>p.cant>0).map(p=><option key={p.id} value={p.id}>{p.nombre} ({p.cant})</option>)}
+              </select>
+            </div>
+            <div style={{marginBottom:10}}>
+              <label className="label">Cantidad de unidades</label>
+              <input className="input" type="number" value={form.cantidad} onChange={e=>setForm({...form,cantidad:e.target.value})} placeholder="Ej: 5"/>
+            </div>
+            <div style={{marginBottom:10}}>
+              <label className="label">⚖️ Peso de la caja (kg)</label>
+              <input className="input" type="number" step="0.1" value={form.peso} onChange={e=>setForm({...form,peso:e.target.value})} placeholder="Ej: 2.5"/>
+            </div>
+            <button className="btn btn-success" style={{width:"100%"}} onClick={agregar}>➕ AGREGAR CAJA</button>
+          </div>
+
+          {msg && <div style={{background:"#FFC107",color:"#333",padding:10,borderRadius:4,marginBottom:10,fontWeight:"bold",fontSize:13}}>{msg}</div>}
+
+          <div className="box">
+            <h3>Cajas registradas ({local.cajas.length})</h3>
+            {local.cajas.length===0 ? <p style={{color:"#999",fontSize:13,textAlign:"center"}}>Sin cajas aún</p> :
+            local.cajas.map((c,i)=>(
+              <div key={c.id} style={{background:"#fff",padding:10,borderRadius:4,display:"flex",justifyContent:"space-between",alignItems:"flex-start",borderLeft:"4px solid #4CAF50",marginBottom:6}}>
+                <div>
+                  <p style={{fontSize:13,fontWeight:"bold",marginBottom:3}}>Caja #{i+1} — {c.producto}</p>
+                  <div style={{fontSize:12,color:"#666"}}>📦 {c.cantidad} un. | ⚖️ <strong>{c.peso} kg</strong> | 🕐 {c.hora} | 👤 {c.operario}</div>
+                </div>
+                <button className="btn btn-danger" style={{padding:"4px 8px",fontSize:11}} onClick={()=>eliminarCaja(c.id)}>✕</button>
+              </div>
+            ))}
+          </div>
+
+          <div style={{background:"#2196F3",color:"#fff",padding:16,borderRadius:8,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,textAlign:"center",marginBottom:14}}>
+            <div><p style={{fontSize:11}}>Cajas</p><p style={{fontSize:20,fontWeight:"bold"}}>{local.cajas.length}</p></div>
+            <div><p style={{fontSize:11}}>Unidades</p><p style={{fontSize:20,fontWeight:"bold"}}>{cantTot}</p></div>
+            <div><p style={{fontSize:11}}>Peso Total</p><p style={{fontSize:20,fontWeight:"bold"}}>{peso.toFixed(2)} kg</p></div>
+          </div>
+
+          <button className="btn btn-success" style={{width:"100%",padding:14,fontSize:15}} disabled={local.cajas.length===0} onClick={completar}>✅ COMPLETAR {local.nombre}</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ====== ADMIN PANEL ======
+function AdminPanel({state,update,setPaso,tab,setTab}){
+  return (
+    <div className="card">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <h2 style={{margin:0}}>👨‍💼 Panel Administrador</h2>
+        <button className="btn btn-danger" onClick={()=>setPaso("login")}>Salir</button>
+      </div>
+      <div style={{display:"flex",gap:4,borderBottom:"2px solid #eee",marginBottom:18,flexWrap:"wrap"}}>
+        <div className={"tab "+(tab==="locales"?"active":"")} onClick={()=>setTab("locales")}>🏪 Locales</div>
+        <div className={"tab "+(tab==="mercaderia"?"active":"")} onClick={()=>setTab("mercaderia")}>📦 Mercadería</div>
+        <div className={"tab "+(tab==="operarios"?"active":"")} onClick={()=>setTab("operarios")}>👤 Operarios</div>
+        <div className={"tab "+(tab==="resumen"?"active":"")} onClick={()=>setTab("resumen")}>📋 Resumen Locales</div>
+        <div className={"tab "+(tab==="historial"?"active":"")} onClick={()=>setTab("historial")}>📁 Historial</div>
+        <div className={"tab "+(tab==="cuenta"?"active":"")} onClick={()=>setTab("cuenta")}>🔐 Cuenta</div>
+      </div>
+      {tab==="locales" && <TabLocales state={state} update={update}/>}
+      {tab==="mercaderia" && <TabMercaderia state={state} update={update}/>}
+      {tab==="operarios" && <TabOperarios state={state} update={update}/>}
+      {tab==="resumen" && <TabResumenLocales state={state} update={update}/>}
+      {tab==="historial" && <TabHistorial state={state} update={update}/>}
+      {tab==="cuenta" && <TabCuenta state={state} update={update}/>}
+    </div>
+  );
+}
+
+// --- LOCALES ---
+function TabLocales({state,update}){
+  const [nombre,setNombre] = useState("");
+
+  const add = ()=>{
+    const n = nombre.trim(); if(!n) return;
+    update(s=>{ s.locales.push({id:Date.now(),nombre:n,productos:[],cajas:[],completado:false,operario:null}); });
+    setNombre("");
+  };
+  const del = (id)=>{
+    if(!confirm("¿Eliminar este local?")) return;
+    update(s=>{ s.locales = s.locales.filter(L=>L.id!==id); });
+  };
+  const reset = (id)=>{
+    if(!confirm("¿Reabrir local? (vuelve a estar pendiente, se vacían sus cajas)")) return;
+    update(s=>{ const L=s.locales.find(x=>x.id===id); if(L){L.completado=false;L.operario=null;L.cajas=[];} });
+  };
+
+  // Importar formato para_facturar (hoja TD) — crea locales automáticamente
+  const importTD = (e)=>{
+    const file = e.target.files[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev)=>{
+      try{
+        const buf = ev.target.result;
+        const wb = XLSX.read(new Uint8Array(buf), {type:"array"});
+        const tdSheet = wb.SheetNames.find(n=>n.trim().toUpperCase()==="TD");
+        if(!tdSheet){ alert("No se encontró la hoja 'TD' en el archivo"); e.target.value=""; return; }
+        const ws = wb.Sheets[tdSheet];
+        const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
+        // Buscar fila de encabezado con Descripcion y Uxb
+        let hIdx = rows.findIndex(r=>
+          r.some(c=>String(c).trim().toLowerCase()==="descripcion") &&
+          r.some(c=>String(c).trim().toLowerCase()==="uxb")
+        );
+        if(hIdx<0){ alert("No se encontró la fila de encabezados en la hoja TD"); e.target.value=""; return; }
+        const header = rows[hIdx];
+        const colDesc = header.findIndex(c=>String(c).trim().toLowerCase()==="descripcion");
+        const colUxb = header.findIndex(c=>String(c).trim().toLowerCase()==="uxb");
+        // Columnas de locales: después de Uxb hasta "Total general"
+        // Los números de local pueden ser enteros (185, 545, 548) o texto, con posibles None entre medio
+        const localCols = [];
+        for(let i=colUxb+1; i<header.length; i++){
+          const v = header[i];
+          if(v===null||v===undefined||v==="") continue; // saltar celdas vacías
+          if(String(v).trim().toLowerCase()==="total general") break;
+          localCols.push({col:i, nombre:String(v).trim()});
+        }
+        if(localCols.length===0){ alert("No se encontraron columnas de locales en la hoja TD"); e.target.value=""; return; }
+        // Productos con al menos una cantidad
+        const products = [];
+        for(let r=hIdx+1; r<rows.length; r++){
+          const desc = String(rows[r][colDesc]||"").trim();
+          if(!desc) continue;
+          const tieneCant = localCols.some(lc=>{ const v=parseInt(rows[r][lc.col]); return v>0; });
+          if(!tieneCant) continue;
+          products.push({nombre:desc, row:rows[r]});
+        }
+        if(products.length===0){ alert("No se encontraron productos con cantidades en la hoja TD"); e.target.value=""; return; }
+        // Guardar archivo original en base64 para exportar con KG después
+        const uint8 = new Uint8Array(buf);
+        let binary = "";
+        uint8.forEach(b=>{ binary += String.fromCharCode(b); });
+        const b64 = btoa(binary);
+        const modo = confirm(`Se van a crear ${localCols.length} locales: ${localCols.map(l=>l.nombre).join(", ")}\ncon ${products.length} productos.\n\nOK = REEMPLAZAR si ya existen\nCancelar = AGREGAR/ACTUALIZAR sin borrar`);
+        update(s=>{
+          if(modo){
+            const names = new Set(localCols.map(l=>l.nombre));
+            s.locales = s.locales.filter(L=>!names.has(L.nombre));
+          }
+          products.forEach(pr=>{
+            if(!s.catalogo.find(c=>c.nombre===pr.nombre)){
+              s.catalogo.push({id:"P"+Date.now()+Math.random().toString(36).slice(2,6), nombre:pr.nombre});
+            }
+          });
+          // Guardar para exportar con KG
+          s.tdImport = { b64, colDesc, colUxb };
+          // Crear locales con el número como nombre
+          localCols.forEach(lc=>{
+            let L = s.locales.find(x=>x.nombre===lc.nombre);
+            if(!L){
+              L = {id:Date.now()+Math.random(), nombre:lc.nombre, productos:[], cajas:[], completado:false, operario:null};
+              s.locales.push(L);
+            }
+            products.forEach(pr=>{
+              const cant = parseInt(pr.row[lc.col]);
+              if(!cant||cant<=0) return;
+              const P = s.catalogo.find(c=>c.nombre===pr.nombre);
+              if(!P) return;
+              const existing = L.productos.find(p=>p.id===P.id);
+              if(existing) existing.cant = cant;
+              else L.productos.push({id:P.id, nombre:P.nombre, cant});
+            });
+          });
+        });
+        alert(`✅ Importado: ${localCols.length} locales (${localCols.map(l=>l.nombre).join(", ")}), ${products.length} productos`);
+      }catch(err){ alert("Error al leer el archivo: "+err.message); }
+      e.target.value="";
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  // Importar formato genérico (fila "locales")
+  const importExcel = (e)=>{
+    const file = e.target.files[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev)=>{
+      try{
+        const wb = XLSX.read(new Uint8Array(ev.target.result), {type:"array"});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
+        let hIdx = rows.findIndex(r=> r.some(c=> String(c).trim().toLowerCase()==="locales"));
+        if(hIdx<0){ alert("No se encontró fila 'locales'"); return; }
+        const headerRow = rows[hIdx];
+        const labelCol = headerRow.findIndex(c=> String(c).trim().toLowerCase()==="locales");
+        const localCols = [];
+        for(let i=labelCol+1; i<headerRow.length; i++){
+          const v = String(headerRow[i]||"").trim();
+          if(v) localCols.push({col:i, nombre:v});
+        }
+        let startRow = hIdx+1;
+        if(rows[startRow] && String(rows[startRow][labelCol]||"").trim().toLowerCase()==="descripcion") startRow++;
+        const productRows = [];
+        for(let r=startRow; r<rows.length; r++){
+          const pname = String(rows[r][labelCol]||"").trim();
+          if(!pname) continue;
+          productRows.push({nombre:pname, row:rows[r]});
+        }
+        if(localCols.length===0 || productRows.length===0){ alert("Excel vacío o sin datos"); return; }
+        const modo = confirm("OK = REEMPLAZAR locales y catálogo importados\nCancelar = AGREGAR/ACTUALIZAR sin borrar");
+        update(s=>{
+          if(modo){
+            const names = new Set(localCols.map(l=>l.nombre));
+            s.locales = s.locales.filter(L=>!names.has(L.nombre));
+          }
+          productRows.forEach(pr=>{
+            if(!s.catalogo.find(c=>c.nombre===pr.nombre)){
+              s.catalogo.push({id:"P"+Date.now()+Math.random().toString(36).slice(2,6), nombre:pr.nombre});
+            }
+          });
+          localCols.forEach(lc=>{
+            let L = s.locales.find(x=>x.nombre===lc.nombre);
+            if(!L){
+              L = {id:Date.now()+Math.random(), nombre:lc.nombre, productos:[], cajas:[], completado:false, operario:null};
+              s.locales.push(L);
+            }
+            productRows.forEach(pr=>{
+              const raw = pr.row[lc.col];
+              const cant = parseInt(raw);
+              if(!cant || cant<=0) return;
+              const P = s.catalogo.find(c=>c.nombre===pr.nombre);
+              const existing = L.productos.find(p=>p.id===P.id);
+              if(existing) existing.cant = cant;
+              else L.productos.push({id:P.id, nombre:P.nombre, cant});
+            });
+          });
+        });
+        alert(`✅ Importado: ${localCols.length} locales, ${productRows.length} productos`);
+      }catch(err){ alert("Error: "+err.message); }
+      e.target.value="";
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  return (
+    <div>
+      <div className="box">
+        <h3>📥 Importar archivo "Para Facturar" (hoja TD)</h3>
+        <p style={{fontSize:12,color:"#666",margin:"4px 0 8px"}}>Seleccioná el archivo <strong>.xls/.xlsx</strong> con la hoja <strong>TD</strong>. Los locales y cantidades se cargan automáticamente.</p>
+        <input type="file" accept=".xlsx,.xls" onChange={importTD} style={{fontSize:13}}/>
+        {state.tdImport && <p style={{fontSize:12,color:"#4CAF50",marginTop:8}}>✅ Archivo "Para Facturar" cargado — podés exportar con KG desde 📁 Historial.</p>}
+      </div>
+
+      <div className="box">
+        <h3>📥 Importar desde Excel (formato genérico)</h3>
+        <p style={{fontSize:12,color:"#666",margin:"4px 0 8px"}}>Formato: fila "locales" con nombres en columnas, filas siguientes con producto + cantidad por local.</p>
+        <input type="file" accept=".xlsx,.xls" onChange={importExcel} style={{fontSize:13}}/>
+      </div>
+
+      <div className="box">
+        <h3>Agregar local</h3>
+        <div className="row">
+          <input className="input" style={{flex:1,minWidth:200}} value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="Nombre del local" onKeyDown={e=>e.key==="Enter"&&add()}/>
+          <button className="btn btn-success" onClick={add}>➕ Agregar</button>
+        </div>
+      </div>
+
+      <div className="box">
+        <h3>Locales ({state.locales.length})</h3>
+        {state.locales.length===0 ? <p style={{color:"#999",fontSize:13}}>Sin locales</p> :
+          <table>
+            <thead><tr><th>Local</th><th>Productos asignados</th><th>Estado</th><th></th></tr></thead>
+            <tbody>
+              {state.locales.map(L=>(
+                <tr key={L.id}>
+                  <td><strong>{L.nombre}</strong></td>
+                  <td>{L.productos.length} ítems</td>
+                  <td><span className={"pill "+(L.completado?"pill-green":"pill-gray")}>{L.completado?"Completado":"Pendiente"}</span></td>
+                  <td style={{textAlign:"right"}}>
+                    {L.completado && <button className="btn btn-warn" style={{marginRight:6,padding:"5px 10px",fontSize:12}} onClick={()=>reset(L.id)}>Reabrir</button>}
+                    <button className="btn btn-danger" style={{padding:"5px 10px",fontSize:12}} onClick={()=>del(L.id)}>Eliminar</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        }
+      </div>
+    </div>
+  );
+}
+
+// --- MERCADERIA ---
+function TabMercaderia({state,update}){
+  const [pNombre,setPNombre] = useState("");
+  const [asign,setAsign] = useState({localId:"",productoId:"",cant:""});
+
+  const addProd = ()=>{
+    const n = pNombre.trim(); if(!n) return;
+    update(s=>{ s.catalogo.push({id:"P"+Date.now(), nombre:n}); });
+    setPNombre("");
+  };
+  const delProd = (id)=>{
+    if(!confirm("¿Eliminar producto del catálogo? También se quitará de los locales.")) return;
+    update(s=>{
+      s.catalogo = s.catalogo.filter(p=>p.id!==id);
+      s.locales.forEach(L=>{ L.productos = L.productos.filter(p=>p.id!==id); });
+    });
+  };
+
+  const asignar = ()=>{
+    if(!asign.localId||!asign.productoId||!asign.cant) return alert("Completá local, producto y cantidad");
+    const cant = parseInt(asign.cant); if(!(cant>0)) return alert("Cantidad inválida");
+    update(s=>{
+      const L = s.locales.find(x=>x.id===parseInt(asign.localId));
+      const P = s.catalogo.find(x=>x.id===asign.productoId);
+      if(!L||!P) return;
+      const existing = L.productos.find(p=>p.id===P.id);
+      if(existing) existing.cant += cant;
+      else L.productos.push({id:P.id, nombre:P.nombre, cant});
+    });
+    setAsign({localId:"",productoId:"",cant:""});
+  };
+
+  const desasignar = (localId, prodId)=>{
+    if(!confirm("¿Desasignar este producto del local?")) return;
+    update(s=>{
+      const L = s.locales.find(x=>x.id===localId);
+      if(L) L.productos = L.productos.filter(p=>p.id!==prodId);
+    });
+  };
+
+  const editarCant = (localId, prodId, val)=>{
+    const cant = parseInt(val); if(!(cant>=0)) return;
+    update(s=>{
+      const L = s.locales.find(x=>x.id===localId);
+      const p = L?.productos.find(x=>x.id===prodId);
+      if(p) p.cant = cant;
+    });
+  };
+
+  return (
+    <div>
+      <div className="box">
+        <h3>Catálogo de productos</h3>
+        <div className="row">
+          <input className="input" style={{flex:1,minWidth:200}} value={pNombre} onChange={e=>setPNombre(e.target.value)} placeholder="Nombre del producto" onKeyDown={e=>e.key==="Enter"&&addProd()}/>
+          <button className="btn btn-success" onClick={addProd}>➕ Agregar</button>
+        </div>
+        {state.catalogo.length===0 ? <p style={{color:"#999",fontSize:13,marginTop:8}}>Sin productos</p> :
+        <table style={{marginTop:10}}>
+          <thead><tr><th>Producto</th><th></th></tr></thead>
+          <tbody>{state.catalogo.map(p=>(
+            <tr key={p.id}><td>{p.nombre}</td><td style={{textAlign:"right"}}><button className="btn btn-danger" style={{padding:"4px 8px",fontSize:11}} onClick={()=>delProd(p.id)}>Eliminar</button></td></tr>
+          ))}</tbody>
+        </table>}
+      </div>
+
+      <div className="box">
+        <h3>Asignar mercadería a local</h3>
+        <div className="row">
+          <select className="select" style={{flex:1,minWidth:140}} value={asign.localId} onChange={e=>setAsign({...asign,localId:e.target.value})}>
+            <option value="">-- Local --</option>
+            {state.locales.map(L=><option key={L.id} value={L.id}>{L.nombre}</option>)}
+          </select>
+          <select className="select" style={{flex:1,minWidth:140}} value={asign.productoId} onChange={e=>setAsign({...asign,productoId:e.target.value})}>
+            <option value="">-- Producto --</option>
+            {state.catalogo.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
+          <input className="input" style={{width:100}} type="number" value={asign.cant} onChange={e=>setAsign({...asign,cant:e.target.value})} placeholder="Cant."/>
+          <button className="btn btn-primary" onClick={asignar}>Asignar</button>
+        </div>
+      </div>
+
+      {state.locales.map(L=>(
+        <div className="box" key={L.id}>
+          <h3>🏪 {L.nombre}</h3>
+          {L.productos.length===0 ? <p style={{color:"#999",fontSize:13}}>Sin productos asignados</p> :
+          <table>
+            <thead><tr><th>Producto</th><th>Cantidad pendiente</th><th></th></tr></thead>
+            <tbody>{L.productos.map(p=>(
+              <tr key={p.id}>
+                <td>{p.nombre}</td>
+                <td><input className="input" type="number" style={{width:90}} value={p.cant} onChange={e=>editarCant(L.id,p.id,e.target.value)}/></td>
+                <td style={{textAlign:"right"}}><button className="btn btn-danger" style={{padding:"4px 8px",fontSize:11}} onClick={()=>desasignar(L.id,p.id)}>Desasignar</button></td>
+              </tr>
+            ))}</tbody>
+          </table>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// --- OPERARIOS ---
+function TabOperarios({state,update}){
+  const [nombre,setNombre] = useState("");
+  const [pass,setPass] = useState("");
+  const add = ()=>{
+    const n = nombre.trim(); if(!n) return;
+    const p = pass.trim() || DEFAULT_OP_PASS;
+    if(state.operarios.some(o=>o.nombre===n)) return alert("Ya existe ese operario");
+    update(s=>{ s.operarios.push({nombre:n, pass:p}); });
+    setNombre(""); setPass("");
+  };
+  const del = (n)=>{
+    if(!confirm(`¿Eliminar operario "${n}"?`)) return;
+    update(s=>{ s.operarios = s.operarios.filter(o=>o.nombre!==n); });
+  };
+  const changePass = (n)=>{
+    const np = prompt(`Nueva contraseña para "${n}":`);
+    if(np===null) return;
+    const v = np.trim(); if(!v) return alert("La contraseña no puede estar vacía");
+    update(s=>{ const o = s.operarios.find(x=>x.nombre===n); if(o) o.pass = v; });
+    alert("Contraseña actualizada");
+  };
+  const [verPass,setVerPass] = useState(false);
+  return (
+    <div>
+      <div className="box">
+        <h3>Agregar operario</h3>
+        <div className="row">
+          <input className="input" style={{flex:2,minWidth:200}} value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="Nombre y apellido"/>
+          <input className="input" style={{flex:1,minWidth:140}} value={pass} onChange={e=>setPass(e.target.value)} placeholder={"Contraseña (def: "+DEFAULT_OP_PASS+")"} onKeyDown={e=>e.key==="Enter"&&add()}/>
+          <button className="btn btn-success" onClick={add}>➕ Agregar</button>
+        </div>
+      </div>
+      <div className="box">
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <h3 style={{margin:0}}>Operarios ({state.operarios.length})</h3>
+          <button className="btn btn-secondary" style={{padding:"4px 10px",fontSize:12}} onClick={()=>setVerPass(v=>!v)}>{verPass?"🙈 Ocultar contraseñas":"👁️ Ver contraseñas"}</button>
+        </div>
+        {state.operarios.length===0 ? <p style={{color:"#999",fontSize:13}}>Sin operarios</p> :
+        <table>
+          <thead><tr><th>Nombre</th><th>Contraseña</th><th></th></tr></thead>
+          <tbody>{state.operarios.map(o=>(
+            <tr key={o.nombre}>
+              <td>{o.nombre}</td>
+              <td style={{fontFamily:"monospace"}}>{verPass ? o.pass : "••••••"}</td>
+              <td style={{textAlign:"right",whiteSpace:"nowrap"}}>
+                <button className="btn btn-primary" style={{padding:"4px 8px",fontSize:11,marginRight:4}} onClick={()=>changePass(o.nombre)}>🔑 Cambiar pass</button>
+                <button className="btn btn-danger" style={{padding:"4px 8px",fontSize:11}} onClick={()=>del(o.nombre)}>Eliminar</button>
+              </td>
+            </tr>
+          ))}</tbody>
+        </table>}
+      </div>
+    </div>
+  );
+}
+
+// --- CUENTA ADMIN ---
+function TabCuenta({state,update}){
+  const [actual,setActual] = useState("");
+  const [nueva,setNueva] = useState("");
+  const [nueva2,setNueva2] = useState("");
+  const [msg,setMsg] = useState(null);
+  const submit = ()=>{
+    if(actual !== state.adminPass) return setMsg({tipo:"error",txt:"Contraseña actual incorrecta"});
+    if(!nueva.trim()) return setMsg({tipo:"error",txt:"La nueva contraseña no puede estar vacía"});
+    if(nueva !== nueva2) return setMsg({tipo:"error",txt:"Las contraseñas nuevas no coinciden"});
+    update(s=>{ s.adminPass = nueva; });
+    setActual(""); setNueva(""); setNueva2("");
+    setMsg({tipo:"ok",txt:"Contraseña del administrador actualizada"});
+  };
+  return (
+    <div>
+      <div className="box" style={{maxWidth:480}}>
+        <h3>Cambiar mi contraseña (administrador)</h3>
+        <p style={{fontSize:12,color:"#666",marginBottom:12}}>Usuario: <strong>{ADMIN_USER}</strong></p>
+        <div style={{marginBottom:10}}>
+          <label className="label">Contraseña actual</label>
+          <input className="input" type="password" value={actual} onChange={e=>setActual(e.target.value)}/>
+        </div>
+        <div style={{marginBottom:10}}>
+          <label className="label">Nueva contraseña</label>
+          <input className="input" type="password" value={nueva} onChange={e=>setNueva(e.target.value)}/>
+        </div>
+        <div style={{marginBottom:10}}>
+          <label className="label">Repetir nueva contraseña</label>
+          <input className="input" type="password" value={nueva2} onChange={e=>setNueva2(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()}/>
+        </div>
+        {msg && <div style={{background:msg.tipo==="ok"?"#4CAF50":"#f44336",color:"#fff",padding:10,borderRadius:4,marginBottom:10,fontSize:13}}>{msg.txt}</div>}
+        <button className="btn btn-primary" onClick={submit}>Guardar contraseña</button>
+      </div>
+      <div className="box" style={{maxWidth:480}}>
+        <h3>Contraseñas de operarios</h3>
+        <p style={{fontSize:13,color:"#666"}}>Para cambiar la contraseña de un operario, andá a la pestaña <strong>👤 Operarios</strong> y tocá <strong>🔑 Cambiar pass</strong> al lado del operario.</p>
+      </div>
+    </div>
+  );
+}
+
+
+// --- RESUMEN LOCALES ---
+function TabResumenLocales({state}){
+  const rows = [];
+  state.locales.forEach(L => {
+    if (L.productos.length === 0) {
+      rows.push({ local: L.nombre, producto: "—", cantidad: 0 });
+    } else {
+      L.productos.forEach(p => {
+        rows.push({ local: L.nombre, producto: p.nombre, cantidad: p.cant });
+      });
+    }
+  });
+
+  const totalUnidades = rows.reduce((s, r) => s + (typeof r.cantidad === "number" ? r.cantidad : 0), 0);
+
+  const exportExcel = () => {
+    const data = [["Local", "Producto", "Cantidad"]];
+    rows.forEach(r => data.push([r.local, r.producto, r.cantidad]));
+    data.push([]);
+    data.push(["TOTAL UNIDADES", "", totalUnidades]);
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Resumen Locales");
+    XLSX.writeFile(wb, `resumen_locales_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
+  const exportPDF = () => {
+    const {jsPDF} = window.jspdf;
+    const doc = new jsPDF();
+    doc.setFontSize(16); doc.text("Resumen de Locales y Productos", 14, 16);
+    doc.setFontSize(11);
+    doc.text(`Total unidades: ${totalUnidades}`, 14, 26);
+    doc.autoTable({
+      startY: 32,
+      head: [["Local", "Producto", "Cantidad"]],
+      body: rows.map(r => [r.local, r.producto, r.cantidad]),
+      styles: { fontSize: 10 }
+    });
+    doc.save(`resumen_locales_${new Date().toISOString().slice(0,10)}.pdf`);
+  };
+
+  return (
+    <div>
+      <div className="box" style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+        <h3 style={{margin:0}}>📋 Resumen de Locales y Productos ({rows.length} filas)</h3>
+        <div style={{display:"flex",gap:8}}>
+          <button className="btn btn-success" onClick={exportExcel}>📊 Exportar Excel</button>
+          <button className="btn btn-primary" onClick={exportPDF}>📄 Exportar PDF</button>
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <p style={{color:"#999",fontSize:13,padding:20,textAlign:"center"}}>No hay locales con productos asignados.</p>
+      ) : (
+        <div className="box">
+          <table>
+            <thead><tr><th>Local</th><th>Producto</th><th>Cantidad</th></tr></thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td><strong>{r.local}</strong></td>
+                  <td>{r.producto}</td>
+                  <td>{r.cantidad}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{fontWeight:"bold",background:"#f5f5f5"}}>
+                <td colSpan="2">TOTAL UNIDADES</td>
+                <td>{totalUnidades}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- HISTORIAL ---
+function TabHistorial({state,update}){
+  const [verId,setVerId] = useState(null);
+  const reg = state.historial.find(h=>h.id===verId);
+
+  // Exportar el archivo original (para_facturar) con columna de KG totales por producto
+  const exportarConKg = ()=>{
+    if(!state.tdImport){ alert("No hay archivo 'Para Facturar' importado. Importalo primero desde la pestaña 🏪 Locales."); return; }
+    if(state.historial.length===0){ alert("No hay historial de cargas todavía."); return; }
+
+    // Calcular kg totales por producto sumando todo el historial
+    const kgPorProducto = {}; // {nombreProducto: kgTotal}
+    state.historial.forEach(h=>{
+      h.cajas.forEach(c=>{
+        kgPorProducto[c.producto] = (kgPorProducto[c.producto]||0) + c.peso;
+      });
+    });
+
+    try{
+      // Reconstruir workbook desde base64
+      const b64 = state.tdImport.b64;
+      const binary = atob(b64);
+      const buf = new Uint8Array(binary.length);
+      for(let i=0;i<binary.length;i++) buf[i]=binary.charCodeAt(i);
+      const wb = XLSX.read(buf, {type:"array"});
+
+      // Trabajar sobre la hoja TD
+      const tdSheet = wb.SheetNames.find(n=>n.trim().toUpperCase()==="TD");
+      if(!tdSheet){ alert("No se encontró la hoja TD en el archivo guardado."); return; }
+      const ws = wb.Sheets[tdSheet];
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
+
+      // Encontrar fila de encabezado
+      let hIdx = rows.findIndex(r=>
+        r.some(c=>String(c).trim().toLowerCase()==="descripcion") &&
+        r.some(c=>String(c).trim().toLowerCase()==="uxb")
+      );
+      if(hIdx<0){ alert("No se encontró encabezado en la hoja TD."); return; }
+      const header = rows[hIdx];
+
+      // Agregar columna "KG Total" al final del encabezado
+      const kgCol = header.length;
+      header.push("KG Total");
+
+      // Agregar kg a cada fila de producto
+      const colDesc = header.findIndex(c=>String(c).trim().toLowerCase()==="descripcion");
+      for(let r=hIdx+1; r<rows.length; r++){
+        const desc = String(rows[r][colDesc]||"").trim();
+        if(!desc){ rows[r].push(""); continue; }
+        const kg = kgPorProducto[desc];
+        rows[r].push(kg!=null ? parseFloat(kg.toFixed(2)) : "");
+      }
+
+      // Reescribir la hoja TD con los datos actualizados
+      const newWs = XLSX.utils.aoa_to_sheet(rows);
+      wb.Sheets[tdSheet] = newWs;
+
+      // Descargar
+      const fecha = new Date().toISOString().slice(0,10);
+      XLSX.writeFile(wb, `para_facturar_con_kg_${fecha}.xlsx`);
+    }catch(err){
+      alert("Error al exportar: "+err.message);
+    }
+  };
+
+  const exportExcel = (h)=>{
+    const wb = XLSX.utils.book_new();
+    const resumen = [["Local",h.localNombre],["Operario",h.operario],["Fecha",new Date(h.fecha).toLocaleString("es-AR")],
+      ["Total cajas",h.totalCajas],["Total unidades",h.totalUn],["Peso total (kg)",h.pesoKg.toFixed(2)]];
+    const ws1 = XLSX.utils.aoa_to_sheet(resumen);
+    XLSX.utils.book_append_sheet(wb,ws1,"Resumen");
+    const rows = [["#","Producto","Cantidad","Peso (kg)","Operario","Hora"]];
+    h.cajas.forEach((c,i)=>rows.push([i+1,c.producto,c.cantidad,c.peso,c.operario,c.hora]));
+    const ws2 = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb,ws2,"Cajas");
+    XLSX.writeFile(wb, `carga_${h.localNombre}_${new Date(h.fecha).toISOString().slice(0,10)}.xlsx`);
+  };
+
+  const exportPDF = (h)=>{
+    const {jsPDF} = window.jspdf;
+    const doc = new jsPDF();
+    doc.setFontSize(16); doc.text("Control de Carga",14,16);
+    doc.setFontSize(11);
+    doc.text(`Local: ${h.localNombre}`,14,26);
+    doc.text(`Operario: ${h.operario}`,14,32);
+    doc.text(`Fecha: ${new Date(h.fecha).toLocaleString("es-AR")}`,14,38);
+    doc.text(`Total: ${h.totalCajas} cajas · ${h.totalUn} un. · ${h.pesoKg.toFixed(2)} kg`,14,44);
+    doc.autoTable({
+      startY:50,
+      head:[["#","Producto","Cant.","Peso(kg)","Operario","Hora"]],
+      body: h.cajas.map((c,i)=>[i+1,c.producto,c.cantidad,c.peso,c.operario,c.hora]),
+      styles:{fontSize:9}
+    });
+    doc.save(`carga_${h.localNombre}_${new Date(h.fecha).toISOString().slice(0,10)}.pdf`);
+  };
+
+  const exportAllExcel = ()=>{
+    const wb = XLSX.utils.book_new();
+    const rows = [["Fecha","Local","Operario","Cajas","Unidades","Peso (kg)"]];
+    state.historial.forEach(h=>rows.push([new Date(h.fecha).toLocaleString("es-AR"),h.localNombre,h.operario,h.totalCajas,h.totalUn,h.pesoKg.toFixed(2)]));
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb,ws,"Historial");
+    const det = [["Fecha","Local","Operario","Producto","Cantidad","Peso (kg)","Hora"]];
+    state.historial.forEach(h=>h.cajas.forEach(c=>det.push([new Date(h.fecha).toLocaleString("es-AR"),h.localNombre,h.operario,c.producto,c.cantidad,c.peso,c.hora])));
+    const ws2 = XLSX.utils.aoa_to_sheet(det);
+    XLSX.utils.book_append_sheet(wb,ws2,"Detalle cajas");
+    XLSX.writeFile(wb, `historial_completo_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+
+  const del = (id)=>{
+    if(!confirm("¿Eliminar este registro del historial?")) return;
+    update(s=>{ s.historial = s.historial.filter(h=>h.id!==id); });
+    if(verId===id) setVerId(null);
+  };
+
+  if(reg){
+    return (
+      <div>
+        <button className="btn btn-secondary" onClick={()=>setVerId(null)} style={{marginBottom:14}}>← Volver al historial</button>
+        <div className="box">
+          <h3>📁 {reg.localNombre} — {new Date(reg.fecha).toLocaleString("es-AR")}</h3>
+          <p style={{fontSize:13,color:"#666",marginBottom:6}}>Operario: <strong>{reg.operario}</strong></p>
+          <p style={{fontSize:13,color:"#666",marginBottom:10}}>{reg.totalCajas} cajas · {reg.totalUn} unidades · <strong>{reg.pesoKg.toFixed(2)} kg</strong></p>
+          <div className="row">
+            <button className="btn btn-success" onClick={()=>exportExcel(reg)}>📊 Exportar Excel</button>
+            <button className="btn btn-primary" onClick={()=>exportPDF(reg)}>📄 Exportar PDF</button>
+          </div>
+        </div>
+        <div className="box">
+          <h3>Cajas</h3>
+          <table>
+            <thead><tr><th>#</th><th>Producto</th><th>Cant.</th><th>Peso</th><th>Operario</th><th>Hora</th></tr></thead>
+            <tbody>{reg.cajas.map((c,i)=>(
+              <tr key={c.id}><td>{i+1}</td><td>{c.producto}</td><td>{c.cantidad}</td><td>{c.peso} kg</td><td>{c.operario}</td><td>{c.hora}</td></tr>
+            ))}</tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="box">
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+          <h3 style={{margin:0}}>📁 Historial de cargas ({state.historial.length})</h3>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {state.historial.length>0 && <button className="btn btn-success" onClick={exportAllExcel}>📊 Exportar TODO a Excel</button>}
+            <button className="btn btn-primary" onClick={exportarConKg}>⚖️ Exportar Para Facturar + KG</button>
+          </div>
+        </div>
+        {state.tdImport && <p style={{fontSize:12,color:"#4CAF50",marginTop:8}}>✅ Archivo "Para Facturar" cargado — listo para exportar con KG totales.</p>}
+        {!state.tdImport && <p style={{fontSize:12,color:"#999",marginTop:8}}>ℹ️ Para exportar con KG, primero importá el archivo desde 🏪 Locales → "Importar archivo Para Facturar".</p>}
+      </div>
+      {state.historial.length===0 ? <p style={{color:"#999",fontSize:13,padding:20,textAlign:"center"}}>Sin cargas todavía. Cuando un operario complete un local, aparecerá acá.</p> :
+      <div className="box">
+        <table>
+          <thead><tr><th>Fecha</th><th>Local</th><th>Operario</th><th>Cajas</th><th>Un.</th><th>Peso</th><th></th></tr></thead>
+          <tbody>
+            {[...state.historial].reverse().map(h=>(
+              <tr key={h.id}>
+                <td>{new Date(h.fecha).toLocaleString("es-AR")}</td>
+                <td><strong>{h.localNombre}</strong></td>
+                <td>{h.operario}</td>
+                <td>{h.totalCajas}</td>
+                <td>{h.totalUn}</td>
+                <td>{h.pesoKg.toFixed(2)} kg</td>
+                <td style={{textAlign:"right",whiteSpace:"nowrap"}}>
+                  <button className="btn btn-primary" style={{padding:"4px 8px",fontSize:11,marginRight:4}} onClick={()=>setVerId(h.id)}>Ver</button>
+                  <button className="btn btn-success" style={{padding:"4px 8px",fontSize:11,marginRight:4}} onClick={()=>exportExcel(h)}>Excel</button>
+                  <button className="btn btn-warn" style={{padding:"4px 8px",fontSize:11,marginRight:4}} onClick={()=>exportPDF(h)}>PDF</button>
+                  <button className="btn btn-danger" style={{padding:"4px 8px",fontSize:11}} onClick={()=>del(h.id)}>✕</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
